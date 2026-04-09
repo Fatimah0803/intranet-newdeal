@@ -198,4 +198,4 @@ jobs:
             Branche : ${{ github.ref_name }}
             Commit  : ${{ github.sha }}
           to: moussawade@groupeisi.com   
-          from: ${{ secrets.MAIL_USERNAME }}
+          from: ${{ secrets.MAIL_USERNAME  }}
