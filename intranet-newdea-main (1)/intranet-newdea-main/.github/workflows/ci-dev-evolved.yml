@@ -1,0 +1,180 @@
+name: CI Pipeline - Dev (Évolution)
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+
+jobs:
+  # ─────────────────────────────────────────
+  # JOB 1 : Build avec image nginx:alpine3.23-slim
+  # ─────────────────────────────────────────
+  build:
+    name: Build Docker Image (slim)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout du code source
+        uses: actions/checkout@v4
+
+      - name: Mise à jour du Dockerfile vers nginx:alpine3.23-slim
+        run: |
+          sed -i 's|FROM nginx:alpine3.23|FROM nginx:alpine3.23-slim|g' Dockerfile
+          echo "📦 Image de base utilisée :"
+          head -1 Dockerfile
+
+      - name: Connexion à Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build de l'image Docker slim
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-${{ github.sha }} .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-${{ github.sha }} \
+                     ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-latest
+
+      - name: Sauvegarde de l'image
+        run: |
+          docker save ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-latest \
+            -o intranet-newdeal-slim.tar
+
+      - name: Upload de l'image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-slim
+          path: intranet-newdeal-slim.tar
+
+  # ─────────────────────────────────────────
+  # JOB 2 : Scan + BLOCAGE si CRITICAL
+  # ─────────────────────────────────────────
+  security-scan:
+    name: Security Scan - Blocage si CRITICAL
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout du code source
+        uses: actions/checkout@v4
+
+      - name: Téléchargement de l'image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-slim
+
+      - name: Chargement de l'image
+        run: docker load -i intranet-newdeal-slim.tar
+
+      # ⛔ exit-code: 1 → le pipeline s'arrête si une vulnérabilité CRITICAL est trouvée
+      - name: Scan Trivy - BLOCAGE si CRITICAL
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-latest
+          format: table
+          exit-code: 1           # ⛔ Bloque le pipeline si CRITICAL détecté
+          ignore-unfixed: true
+          severity: CRITICAL     # Uniquement les CRITICAL bloquent
+          output: trivy-slim-report.txt
+
+      - name: Scan des secrets avec Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload du rapport
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-slim-report
+          path: trivy-slim-report.txt
+
+  # ─────────────────────────────────────────
+  # JOB 3 : Push vers Docker Hub
+  # ─────────────────────────────────────────
+  push:
+    name: Push Image slim to Docker Hub
+    runs-on: ubuntu-latest
+    needs: security-scan
+
+    steps:
+      - name: Téléchargement de l'image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-slim
+
+      - name: Chargement de l'image
+        run: docker load -i intranet-newdeal-slim.tar
+
+      - name: Connexion à Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push vers Docker Hub
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal:slim-latest
+
+  # ─────────────────────────────────────────
+  # JOB 4 : Notification Email (succès/échec)
+  # ─────────────────────────────────────────
+  notify:
+    name: Notification Email
+    runs-on: ubuntu-latest
+    needs: [build, security-scan, push]
+    if: always()    # S'exécute même en cas d'échec
+
+    steps:
+      - name: Détermination du statut global
+        id: status
+        run: |
+          if [[ "${{ needs.build.result }}" == "success" && \
+                "${{ needs.security-scan.result }}" == "success" && \
+                "${{ needs.push.result }}" == "success" ]]; then
+            echo "status=✅ SUCCÈS" >> $GITHUB_OUTPUT
+            echo "color=green" >> $GITHUB_OUTPUT
+          else
+            echo "status=❌ ÉCHEC" >> $GITHUB_OUTPUT
+            echo "color=red" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Envoi de la notification email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: false
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: |
+            [CI/CD] Intranet NewDeal – ${{ steps.status.outputs.status }} – Branche dev
+          to: moussawade@groupeisi.com
+          from: ${{ secrets.MAIL_USERNAME }}
+          body: |
+            Bonjour,
+
+            Voici le résumé de l'exécution du pipeline CI/CD pour le projet Intranet NewDeal.
+
+            ──────────────────────────────────────
+            Statut global : ${{ steps.status.outputs.status }}
+            Branche       : dev
+            Commit        : ${{ github.sha }}
+            Auteur        : ${{ github.actor }}
+            Date          : ${{ github.event.head_commit.timestamp }}
+            ──────────────────────────────────────
+
+            Détail par job :
+              • Build        : ${{ needs.build.result }}
+              • Scan sécu    : ${{ needs.security-scan.result }}
+              • Push         : ${{ needs.push.result }}
+
+            🔗 Lien vers l'exécution :
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Cordialement,
+            Pipeline CI/CD – Ministère de la Communication du Sénégal

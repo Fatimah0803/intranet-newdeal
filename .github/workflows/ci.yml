@@ -166,36 +166,4 @@ jobs:
       - name: Push vers Docker Hub
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/intranet-newdeal:dev
-          # ── Notification email succès ──
-      - name: 📧 Notification email (succès)
-        if: success()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "✅ Pipeline réussi – Intranet NewDeal (${{ github.ref_name }})"
-          body: |
-            Le pipeline CI/CD s'est exécuté avec succès.
-            Branche : ${{ github.ref_name }}
-            Commit  : ${{ github.sha }}
-          to: moussawade@groupeisi.com
-          from: ${{ secrets.MAIL_USERNAME }}
-
-      # ── Notification email échec ──
-      - name: 📧 Notification email (échec)
-        if: failure()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "❌ Pipeline   ÉCHOUÉ – Intranet NewDeal (${{ github.ref_name }})"
-          body: |
-            ⚠️ Le pipeline a échoué. Vérifiez  les logs GitHub Actions.
-            Branche : ${{ github.ref_name }}
-            Commit  : ${{ github.sha }}
-          to: moussawade@groupeisi.com   
-          from: ${{ secrets.MAIL_USERNAME  }}
+          
